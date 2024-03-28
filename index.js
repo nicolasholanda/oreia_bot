@@ -1,11 +1,20 @@
+require('dotenv').config()
+const { OpenAI } = require('openai')
 const { Client, LocalAuth, MessageMedia, MessageTypes } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal')
 const axios = require('axios')
+const {readEnv} = require("openai/core");
+
+
+const openai = new OpenAI()
+openai.baseURL = 'https://zukijourney.xyzbot.net/v1'
 
 const commands = [
     {'id': '.menu', 'descricao': 'Ver comandos'},
     {'id': '.sticker', 'descricao': 'Gerar figurinha da imagem/vídeo/gif anexado'},
+    {'id': '.audio <descrição>', 'descricao': 'Gerar áudio do texto'},
     {'id': '.sticker <link>', 'descricao': 'Gerar figurinha da imagem do link'},
+    {'id': '.sticker <descrição da imagem>', 'descricao': 'Gerar imagem por IA'},
 ]
 
 const client = new Client({
@@ -57,9 +66,34 @@ const createMenuStr = () => {
     return title + commands.map(c => '♦️ *' + c.id + '* ~> ' + c.descricao).join('\n\n')
 }
 
-const getMediaFromLink = async (msg) => {
-    const url = msg.body.substring(msg.body.indexOf(" ")).trim()
-    const { data } = await axios.get(url, {responseType: 'arraybuffer'})
+const getMediaFromText = async (msg) => {
+    const msgContent = msg.body.substring(msg.body.indexOf(" ")).trim();
+    return isLink(msgContent) ? getMediaFromLink(msgContent) : getMediaFromGpt(msgContent)
+}
+
+const getMediaFromGpt = async (msgContent) => {
+    const gptResponse = await openai.images.generate({
+        user: 'oreiabot',
+        size: '256x256',
+        quality: 'standard',
+        model: 'dall-e-3',
+        prompt: msgContent,
+        n: 1,
+        response_format: 'b64_json'
+    })
+
+    if(!gptResponse || !gptResponse.data) {
+        throw new Error("Prompt inválido para o GPT")
+    }
+
+    const imgUrl = gptResponse.data[0].url
+
+    return getMediaFromLink(imgUrl)
+}
+
+const getMediaFromLink = async (msgContent) => {
+    const url = msgContent.substring(msgContent.indexOf(" ")).trim()
+    const { data } = await axios.get(url, {responseType: 'arraybuffer', headers: {'Authorization': 'Bearer ' + readEnv('OPENAI_API_KEY')}})
     const returnedB64 = Buffer.from(data).toString('base64');
     return new MessageMedia("image/jpeg", returnedB64, "image.jpg")
 }
@@ -77,8 +111,13 @@ const getMediaFromVideo = async (msg) => {
 const mediaFunctionMap = [
     {'msgType': MessageTypes.IMAGE, 'handler': getMediaFromImage},
     {'msgType': MessageTypes.VIDEO, 'handler': getMediaFromVideo},
-    {'msgType': MessageTypes.TEXT, 'handler': getMediaFromLink},
+    {'msgType': MessageTypes.TEXT, 'handler': getMediaFromText}
 ]
+
+const isLink = (str) => {
+    const urlRegex = /^(https?|ftp):\/\/[^\s/$.?#].\S*$/i;
+    return urlRegex.test(str);
+}
 
 const generateSticker = async (msg) => {
     const sender = msg.from
